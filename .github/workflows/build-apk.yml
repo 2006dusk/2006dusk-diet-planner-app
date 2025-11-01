@@ -1,0 +1,154 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.8'
+
+    - name: Install system dependencies required by python-for-android
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends
+          autoconf automake libtool m4 gettext pkg-config build-essential
+          gcc g++ make cmake
+          libffi-dev libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev
+          libncurses5-dev libncursesw5-dev liblzma-dev
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install cython==0.29.36
+        pip install buildozer
+
+    - name: Clean previous buildozer state (fresh start)
+      run: |
+        # defensive: ensure python-for-android will be freshly cloned
+        rm -rf .buildozer
+        rm -rf .buildozer/android/platform/python-for-android || true
+
+    - name: Setup Android SDK
+      run: |
+        export ANDROID_HOME=/home/runner/.buildozer/android/platform/android-sdk
+        mkdir -p $ANDROID_HOME
+        # Install SDK tools in the expected location
+        cd /tmp
+        wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+        unzip commandlinetools-linux-9477386_latest.zip
+        mkdir -p $ANDROID_HOME/tools
+        mv cmdline-tools/* $ANDROID_HOME/tools/
+        rm -rf cmdline-tools
+        export PATH=$PATH:$ANDROID_HOME/tools/bin
+        
+        # Accept licenses
+        yes | sdkmanager --sdk_root=$ANDROID_HOME --licenses
+        
+        # Install platform tools and build tools
+        sdkmanager --sdk_root=$ANDROID_HOME "platform-tools" "build-tools;33.0.2" "platforms;android-33" "platforms;android-21"
+        
+        # Install NDK
+        sdkmanager --sdk_root=$ANDROID_HOME "ndk;25.1.8937393"
+        
+        # Debug information
+        echo "ANDROID_HOME: $ANDROID_HOME"
+        echo "Tools directory contents:"
+        ls -la $ANDROID_HOME/tools/
+        echo "Bin directory contents:"
+        ls -la $ANDROID_HOME/tools/bin/
+
+    - name: Configure buildozer
+      run: |
+        # Ensure configuration is correct
+        sed -i 's/log_level =.*/log_level = 2/' buildozer.spec
+        sed -i 's/android.arch =.*/android.archs = arm64-v8a,armeabi-v7a/' buildozer.spec
+        
+        # Add p4a configuration to use local recipes if needed
+        echo "" >> buildozer.spec
+        echo "# Use local python-for-android" >> buildozer.spec
+        echo "p4a.local_recipes = ." >> buildozer.spec
+
+    - name: (Defensive) Run autoupdate/autoreconf if p4a present
+      run: |
+        if [ -d ".buildozer/android/platform/python-for-android" ]; then
+          cd .buildozer/android/platform/python-for-android || exit 0
+          autoupdate || true
+          autoreconf -vfi || true
+          cd - >/dev/null || true
+        fi
+
+    - name: Prepare build environment
+      run: |
+        # Ensure buildozer is properly installed and accessible
+        export ANDROID_HOME=/home/runner/.buildozer/android/platform/android-sdk
+        export PATH=$PATH:$ANDROID_HOME/tools/bin:/home/runner/.local/bin
+        
+        # Debug information
+        echo "PATH: $PATH"
+        echo "Checking buildozer installation:"
+        which buildozer || echo "buildozer not found in PATH"
+        pip list | grep buildozer || echo "buildozer not found in pip list"
+        
+        # Install additional dependencies that may be needed
+        pip install pillow
+
+    - name: Build APK
+      run: |
+        export ANDROID_HOME=/home/runner/.buildozer/android/platform/android-sdk
+        export PATH=$PATH:$ANDROID_HOME/tools/bin:/home/runner/.local/bin
+        
+        # Debug information
+        echo "Final environment check:"
+        echo "ANDROID_HOME: $ANDROID_HOME"
+        echo "PATH: $PATH"
+        echo "buildozer location:"
+        which buildozer
+        echo "sdkmanager location:"
+        which sdkmanager
+        
+        # Start build with verbose output
+        buildozer -v android debug
+
+    - name: Debug on failure
+      if: failure()
+      run: |
+        echo "Build failed. Collecting debug information..."
+        export ANDROID_HOME=/home/runner/.buildozer/android/platform/android-sdk
+        
+        echo "=== Buildozer spec ==="
+        cat buildozer.spec
+        
+        echo "=== Android SDK information ==="
+        ls -la $ANDROID_HOME/
+        ls -la $ANDROID_HOME/tools/
+        
+        echo "=== Environment variables ==="
+        env | grep -i android
+        env | grep -i java
+        
+        echo "=== Python packages ==="
+        pip list
+        
+        echo "=== Buildozer log ==="
+        if [ -f /tmp/buildozer.log ]; then
+          cat /tmp/buildozer.log
+        else
+          echo "No buildozer log found"
+        fi
+
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: dietplanner-apk
+        path: bin/*.apk

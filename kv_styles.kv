@@ -1,0 +1,95 @@
+#:import rgba kivy.utils.get_color_from_hex
+#:import App kivy.app.App
+#:import Window kivy.core.window.Window
+#:import Animation kivy.animation.Animation
+#:import Clock kivy.clock.Clock
+#:import dp kivy.metrics.dp
+#:import sp kivy.metrics.sp
+
+# 全局 TabButton 样式
+<TabButton>:
+    size_hint_y: None
+    height: '50dp'
+    background_color: (0, 0, 0, 0)  # 透明背景
+    color: rgba('#000000') if self.active else rgba('#8E8E93')
+    bold: self.active
+    font_size: '10sp'
+    font_name: 'ChineseFont' if App.get_running_app().font_available else 'Roboto'
+    
+    canvas.before:
+        Color:
+            rgba: (126/255, 218/255, 184/255, 1) if self.active else (126/255, 218/255, 184/255, 0.3)
+        RoundedRectangle:
+            pos: (self.center_x - dp(25), self.y + dp(5))
+            size: (dp(50), dp(3))
+            radius: [dp(2), ]
+
+# 全局 FlatButton 样式
+<FlatButton>:
+    size_hint_y: None
+    height: '48dp'
+    background_color: (0, 0, 0, 0)
+    color: rgba('#000000')
+    font_size: '16sp'
+    font_name: 'ChineseFont' if App.get_running_app().font_available else 'Roboto'
+    
+    canvas.before:
+        Color:
+            rgba: (0.498, 0.855, 0.722, 0.3)  # 统一的清新绿色 #7EDAB8
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(12), ]
+
+# 全局 Card 样式
+<Card>:
+    canvas.before:
+        Color:
+            rgba: (1, 1, 1, 0.85)
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(12), ]
+
+# 全局 GenderButton 样式
+<GenderButton>:
+    size_hint_y: None
+    height: '48dp'
+    background_color: (0, 0, 0, 0)
+    color: rgba('#000000')
+    font_size: '16sp'
+    font_name: 'ChineseFont' if App.get_running_app().font_available else 'Roboto'
+    
+    canvas.before:
+        Color:
+            # 男: 蓝色, 女: 粉色
+            rgba: (0.2, 0.6, 1, 1) if (self.gender == 'male' and self.selected) else (1, 0.6, 0.8, 1) if (self.gender == 'female' and self.selected) else (0.2, 0.6, 1, 0.3) if self.gender == 'male' else (1, 0.6, 0.8, 0.3) if self.gender == 'female' else (0.498, 0.855, 0.722, 0.3)
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(12), ]
+
+# 全局 GoalButton 样式
+<GoalButton>:
+    size_hint_y: None
+    height: '48dp'
+    background_color: (0, 0, 0, 0)
+    color: rgba('#000000')
+    font_size: '16sp'
+    font_name: 'ChineseFont' if App.get_running_app().font_available else 'Roboto'
+    
+    canvas.before:
+        Color:
+            # 移除对selected属性的依赖，使按钮与普通按钮保持一致
+            rgba: (0.498, 0.855, 0.722, 0.3)
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(12), ]
+
+# 为PlanScreen中的按钮添加更明确的布局样式
+<BoxLayout>:
+    # 为包含按钮的BoxLayout添加更明确的布局属性
+    canvas.before:
+        Color:
+            rgba: 1, 1, 1, 0  # 透明背景

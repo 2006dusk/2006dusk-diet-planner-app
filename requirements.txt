@@ -1,0 +1,5 @@
+kivy==2.3.0
+requests
+urllib3
+numpy
+pypinyin

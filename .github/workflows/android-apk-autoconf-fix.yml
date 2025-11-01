@@ -1,0 +1,219 @@
+name: Build Android APK with Autoconf Fix
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    env:
+      LANG: C.UTF-8
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.8'
+
+    - name: Install and diagnose autoconf
+      run: |
+        sudo apt-get update
+        # Install autoconf and related tools with force reinstall to ensure clean state
+        sudo apt-get install --reinstall -y \
+          autoconf autoconf-archive automake libtool libtool-bin m4 gettext pkg-config \
+          build-essential gcc g++ make cmake bison flex \
+          libffi-dev libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
+          libncurses-dev libncursesw5-dev liblzma-dev unzip
+
+        # Diagnostic information
+        echo "=== Autoconf diagnostics ==="
+        autoconf --version || echo "autoconf not working"
+        echo "which autoconf: $(which autoconf)"
+        file $(which autoconf) || echo "autoconf not found"
+        
+        # Check for conflicting files in repo root
+        if [ -f ./autoconf ]; then
+          echo "WARNING: Conflicting autoconf file found in repo root"
+          ls -la ./autoconf
+          file ./autoconf
+          echo "Removing conflicting autoconf file"
+          rm -f ./autoconf
+        fi
+
+    - name: Cache .buildozer (optional)
+      uses: actions/cache@v4
+      with:
+        path: .buildozer
+        key: buildozer-${{ runner.os }}-v2-${{ hashFiles('**/buildozer.spec') }}
+        restore-keys: |
+          buildozer-${{ runner.os }}-v2-
+
+    - name: Clean previous buildozer state
+      run: |
+        rm -rf .buildozer
+        mkdir -p .buildozer
+
+    - name: Install pip dependencies
+      run: |
+        python -m pip install --upgrade pip setuptools wheel
+        python -m pip install "Cython>=0.29"
+        python -m pip install "buildozer==1.6.0" || python -m pip install buildozer
+        python -m pip install pyjnius || true
+
+    - name: Fix python-for-android toolchain arguments
+      run: |
+        echo "Creating fixed toolchain script..."
+        mkdir -p .buildozer/android/platform
+        
+        # Create a fixed version of the toolchain script that doesn't have argument conflicts
+        cat > fix_p4a_toolchain.py << 'EOF'
+#!/usr/bin/env python3
+
+import os
+import sys
+from pathlib import Path
+
+def fix_toolchain():
+    # Look for python-for-android directory
+    possible_paths = [
+        Path(".buildozer/android/platform/python-for-android"),
+        Path(os.path.expanduser("~/.buildozer/android/platform/python-for-android")),
+    ]
+    
+    p4a_dir = None
+    for path in possible_paths:
+        if path.exists():
+            p4a_dir = path
+            break
+    
+    if not p4a_dir:
+        print("python-for-android directory not found")
+        return False
+        
+    print(f"Found python-for-android at: {p4a_dir}")
+    
+    # Path to the main toolchain file
+    toolchain_main = p4a_dir / "pythonforandroid" / "toolchain.py"
+    
+    if not toolchain_main.exists():
+        print(f"Toolchain main file not found at: {toolchain_main}")
+        # Try alternative locations
+        toolchain_main = p4a_dir / "pythonforandroid" / "entrypoints.py"
+        if not toolchain_main.exists():
+            print("Could not find toolchain entrypoint")
+            return False
+    
+    print(f"Found toolchain entrypoint at: {toolchain_main}")
+    
+    # Read the file
+    with open(toolchain_main, 'r') as f:
+        content = f.read()
+    
+    # Fix argument conflicts - remove duplicate help argument definitions
+    # This fixes the "invalid number of arguments" error with autoconf
+    if 'add_argument.*-h.*--help' in content:
+        print("Found potential argument conflict, fixing...")
+        # Remove explicit -h/--help definitions that conflict with argparse defaults
+        import re
+        # Remove lines that add -h or --help arguments explicitly
+        content = re.sub(r'.*add_argument.*["\']-h.*["\'].*help.*\n', '', content)
+        content = re.sub(r'.*add_argument.*["\']--help.*["\'].*help.*\n', '', content)
+        
+        # Write the fixed content back
+        with open(toolchain_main, 'w') as f:
+            f.write(content)
+            
+        print("Fixed argument conflicts in toolchain")
+        return True
+    else:
+        print("No argument conflicts found")
+        return True
+
+if __name__ == '__main__':
+    success = fix_toolchain()
+    sys.exit(0 if success else 1)
+EOF
+
+        python fix_p4a_toolchain.py
+
+    - name: Build APK with buildozer
+      id: build
+      run: |
+        set -euo pipefail
+        echo "=== Build Environment Diagnostics ==="
+        echo "Python: $(python --version)"
+        echo "Pip: $(pip --version)"
+        echo "Cython: $(python -c "import Cython; print(Cython.version)" 2>/dev/null || echo 'not found')"
+        echo "Buildozer: $(buildozer --version || true)"
+        
+        # Run the build
+        buildozer android debug
+
+    - name: Upload build artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-artifacts
+        path: |
+          bin/*.apk
+          bin/*.aab
+          .buildozer/
+
+  diagnose-failure:
+    runs-on: ubuntu-latest
+    needs: build-apk
+    if: failure()
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.8'
+
+    - name: Install diagnostic tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y strace autoconf automake libtool
+
+    - name: Run autoconf diagnostics
+      run: |
+        echo "=== Autoconf Deep Diagnostics ==="
+        
+        # Check all autoconf instances
+        echo "All autoconf instances:"
+        command -v -a autoconf || true
+        which -a autoconf || true
+        
+        # Check file type and content
+        if command -v autoconf >/dev/null 2>&1; then
+          AUTOCONF_PATH=$(which autoconf)
+          echo "Autoconf path: $AUTOCONF_PATH"
+          echo "File type:"
+          file "$AUTOCONF_PATH"
+          
+          # If it's a text file, show beginning
+          if file "$AUTOCONF_PATH" | grep -qi text; then
+            echo "Beginning of autoconf script:"
+            head -n 50 "$AUTOCONF_PATH"
+          fi
+        fi
+        
+        # Try to run autoconf with strace for detailed diagnostics
+        echo "Running autoconf --version with strace:"
+        strace -f -o /tmp/autoconf.trace timeout 10 autoconf --version || echo "autoconf failed"
+        
+        echo "Last 100 lines of trace:"
+        tail -n 100 /tmp/autoconf.trace || true
+
+    - name: Upload diagnostics
+      uses: actions/upload-artifact@v4
+      with:
+        name: failure-diagnostics
+        path: |
+          /tmp/autoconf.trace

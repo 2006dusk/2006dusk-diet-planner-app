@@ -1,0 +1,247 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    env:
+      LANG: C.UTF-8
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.8'
+
+    - name: Install build tools, force-reinstall autoconf if needed, and diagnose
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          autoconf autoconf-archive automake libtool libtool-bin m4 gettext pkg-config \
+          build-essential gcc g++ make cmake bison flex \
+          libffi-dev libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
+          libncurses-dev libncursesw5-dev liblzma-dev unzip
+
+        echo "=== autoconf basic info ==="
+        autoconf --version 2>/dev/null || true
+        echo "which autoconf: $(which autoconf 2>/dev/null || echo 'not-found')"
+        if [ -x "$(which autoconf 2>/dev/null)" ]; then
+          echo "file: $(file $(which autoconf))"
+          if file "$(which autoconf)" | grep -qi text; then
+            echo "head of autoconf (first 200 lines):"
+            head -n 200 "$(which autoconf)" || true
+          fi
+        fi
+
+        if ! autoconf --version >/dev/null 2>&1; then
+          echo "Autoconf unusable; reinstalling autoconf/m4/libtool..."
+          sudo apt-get install --reinstall -y autoconf m4 libtool libtool-bin || true
+          echo "After reinstall:"
+          autoconf --version || true
+          file $(which autoconf) || true
+        fi
+
+    - name: Cache .buildozer (optional)
+      uses: actions/cache@v4
+      with:
+        path: .buildozer
+        key: buildozer-${{ runner.os }}-v1-${{ hashFiles('**/buildozer.spec') }}
+        restore-keys: |
+          buildozer-${{ runner.os }}-v1-
+
+    - name: Clean previous buildozer state (fresh start)
+      run: |
+        rm -rf .buildozer
+        mkdir -p .buildozer
+
+    - name: Remove conflicting autoconf files
+      run: |
+        # Remove or rename conflicting autoconf files in repo root
+        if [ -f ./autoconf ]; then
+          echo "Removing conflicting autoconf file in repo root"
+          rm -f ./autoconf
+        fi
+        
+        # Also check for backup files that might interfere
+        if [ -f ./autoconf.bak ]; then
+          echo "Removing autoconf backup file"
+          rm -f ./autoconf.bak
+        fi
+
+    - name: Install pip deps (buildozer & pyjnius)
+      run: |
+        python -m pip install --upgrade pip setuptools wheel
+        python -m pip install "Cython>=0.29"  # 安装 Cython（可锁定具体版本）
+        python -m pip install "buildozer==1.6.0" || python -m pip install buildozer
+        python -m pip install pyjnius || true
+
+    - name: Ensure Android SDK cmdline-tools present (defensive)
+      run: |
+        sudo apt-get install -y --no-install-recommends unzip || true
+
+    - name: Build APK with buildozer
+      id: build
+      run: |
+        set -euo pipefail
+        echo "=== Diagnostics before build ==="
+        echo "Python: $(python --version)"
+        echo "Pip: $(pip --version)"
+        echo "Cython: $(python -c "import Cython; print(Cython.version)" 2>/dev/null || echo 'not found')"
+        echo "Buildozer: $(buildozer --version || true)"
+        sed -n '1,200p' buildozer.spec || true
+        # Run the build normally; let it fail if there's a problem
+        buildozer android debug
+
+    - name: Upload buildozer state for diagnostics
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: buildozer-state
+        path: .buildozer
+
+    - name: Upload build artifacts (if any)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: buildozer-output
+        path: |
+          bin/*.apk
+          bin/*.aab
+
+  diagnose-p4a:
+    runs-on: ubuntu-latest
+    needs: build-apk
+    if: needs.build-apk.result == 'failure'
+    env:
+      LANG: C.UTF-8
+    steps:
+    - name: Download buildozer-state artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: buildozer-state
+        path: ./buildozer-artifact || true
+
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.8'
+
+    - name: Install system deps required for autoreconf and diagnostics
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          autoconf autoconf-archive automake libtool libtool-bin m4 gettext pkg-config \
+          build-essential gcc g++ make cmake bison flex \
+          libffi-dev libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
+          libncurses-dev libncursesw5-dev liblzma-dev unzip
+
+        echo "=== autoconf information ==="
+        autoconf --version 2>/dev/null || true
+        which autoconf || true
+        file $(which autoconf) || true
+
+    - name: Autoconf deep diagnostics
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends strace || true
+
+        echo "=== locate autoconf (all matches) ==="
+        command -v -a autoconf || true
+        which -a autoconf || true
+
+        AUTOCONF_BIN=$(command -v autoconf 2>/dev/null || true)
+        echo "autoconf path: $AUTOCONF_BIN"
+
+        if [ -n "$AUTOCONF_BIN" ]; then
+          echo "ls -la:"
+          ls -la "$AUTOCONF_BIN" || true
+          echo "file type:"
+          file "$AUTOCONF_BIN" || true
+          echo "head (first 200 lines) if text:"
+          if file "$AUTOCONF_BIN" | grep -qi text; then
+            head -n 200 "$AUTOCONF_BIN" || true
+          fi
+        else
+          echo "autoconf not found in PATH"
+        fi
+
+        echo "=== apt/dpkg info ==="
+        apt-cache policy autoconf || true
+        dpkg -l | grep autoconf || true
+        dpkg -L autoconf || true
+
+        echo "=== PATH and env ==="
+        echo "$PATH"
+        env | sed -n '1,200p'
+
+        echo "=== try running autoconf --version (normal) ==="
+        autoconf --version 2>&1 || true
+
+        echo "=== try explicit /usr/bin/autoconf --version ==="
+        if [ -x /usr/bin/autoconf ]; then /usr/bin/autoconf --version 2>&1 || true; fi
+
+        echo "=== strace autoconf --version (captures syscalls) ==="
+        strace -f -o /tmp/autoconf.strace autoconf --version || true
+        echo "==== head of /tmp/autoconf.strace ===="
+        sed -n '1,200p' /tmp/autoconf.strace || true
+
+    - name: Locate python-for-android source in artifact or clone p4a
+      run: |
+        # Prefer the artifact-provided .buildozer copy (downloaded to ./buildozer-artifact/.buildozer)
+        if [ -d "./buildozer-artifact/.buildozer/android/platform/python-for-android" ]; then
+          P4A_DIR="./buildozer-artifact/.buildozer/android/platform/python-for-android"
+          echo "Found python-for-android at artifact: ${P4A_DIR}"
+        else
+          # If artifact doesn't include p4a, clone upstream to run autoreconf diagnostics
+          P4A_DIR="$PWD/python-for-android"
+          echo "Cloning python-for-android to ${P4A_DIR}"
+          git clone https://github.com/kivy/python-for-android.git "${P4A_DIR}" || true
+        fi
+        echo "P4A dir: ${P4A_DIR}"
+        ls -la "${P4A_DIR}" || true
+        echo "pwd: $(pwd)"
+
+    - name: Run autoupdate / autoreconf for diagnostics on p4a
+      run: |
+        set -euo pipefail
+        if [ -d "${P4A_DIR}" ]; then
+          cd "${P4A_DIR}" || exit 0
+          echo "cwd: $(pwd)"
+          echo "Running autoupdate (if present) and autoreconf..."
+          autoupdate || true
+          autoreconf -vfi || true
+          echo "autoreconf exit: $?"
+          # Print configure.ac vicinity for easier debugging
+          echo "---- configure.ac head ----"
+          sed -n '1,200p' configure.ac || true
+          echo "---- libtool and m4 files ----"
+          ls -la lib*/m4* ./lib || true
+          cd - >/dev/null || true
+        else
+          echo "python-for-android directory not found; skipping autoreconf."
+        fi
+
+    - name: Print diagnostic files
+      run: |
+        echo "Listing artifact contents (first levels):"
+        ls -la buildozer-artifact || true
+        echo "Listing .buildozer android platform dir if present:"
+        ls -la buildozer-artifact/.buildozer/android/platform || true
+
+    - name: Upload diagnostic logs
+      uses: actions/upload-artifact@v4
+      with:
+        name: p4a-diagnostics
+        path: |
+          ./python-for-android/**/*
+          buildozer-artifact/**/*
+          ./p4a-diagnostics.log || true
