@@ -61,6 +61,9 @@ android.api = 33
 # (int) Minimum API your APK / AAB will support.
 android.minapi = 21
 
+# (str) Path to Aidl
+android.aidl = /home/runner/android-sdk/build-tools/33.0.2/aidl
+
 # (str) Android NDK version to use
 android.ndk = 25b
 
@@ -135,7 +138,7 @@ android.allow_backup = True
 # p4a.source_dir = .
 
 # (bool) If True, then skip cloning the python-for-android git repository
-p4a.no_git_clone = False
+p4a.no_git_clone = True
 
 # Control passing the --use-setup-py vs --ignore-setup-py to p4a
 # "in the future" --use-setup-py is going to be the default behaviour in p4a, right now it is not

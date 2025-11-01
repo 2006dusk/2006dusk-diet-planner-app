@@ -26,13 +26,15 @@ fi
 echo "安装Android SDK组件..."
 yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME \
   "platform-tools" \
-  "build-tools;33.0.2" \
   "platforms;android-33" \
   "tools"
 
 # 接受许可证
 echo "接受Android SDK许可证..."
 yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
+
+# 显式安装build-tools
+yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME "build-tools;33.0.2"
 
 # 安装Python依赖
 echo "安装Python依赖..."

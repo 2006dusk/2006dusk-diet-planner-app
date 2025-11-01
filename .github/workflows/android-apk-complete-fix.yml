@@ -55,8 +55,14 @@ jobs:
           "platforms;android-33" \
           "tools"
         
-        # Accept licenses
+        # Accept all licenses
         yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
+        
+        # Accept all licenses non-interactively
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
+        
+        # Explicitly install build-tools
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME "build-tools;33.0.2"
         
         # Verify installation
         echo "Android SDK setup complete"
