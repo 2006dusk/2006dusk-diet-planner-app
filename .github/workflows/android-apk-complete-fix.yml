@@ -1,0 +1,147 @@
+name: Build Android APK - Complete Fix
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-20.04
+    env:
+      ANDROID_HOME: /home/runner/android-sdk
+      ANDROID_SDK_ROOT: /home/runner/android-sdk
+      LANG: C.UTF-8
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.8'
+
+    - name: Set up Java
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential libffi-dev libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
+          libncurses-dev libncursesw5-dev liblzma-dev unzip wget \
+          libgl1 libglx-dev libglib2.0-0 libsm6 libxext6 libxrender-dev libgomp1
+
+    - name: Set up Android SDK
+      run: |
+        # Create Android SDK directory
+        mkdir -p $ANDROID_HOME
+        
+        # Download and install Android command line tools
+        cd /tmp
+        wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O sdk-tools.zip
+        unzip -q sdk-tools.zip -d $ANDROID_HOME/
+        mkdir -p $ANDROID_HOME/cmdline-tools/latest
+        mv $ANDROID_HOME/cmdline-tools/* $ANDROID_HOME/cmdline-tools/latest/ 2>/dev/null || true
+        rm -f $ANDROID_HOME/cmdline-tools/latest.zip
+        
+        # Install required SDK components
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME \
+          "platform-tools" \
+          "build-tools;33.0.2" \
+          "platforms;android-33" \
+          "tools"
+        
+        # Accept licenses
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
+        
+        # Verify installation
+        echo "Android SDK setup complete"
+        ls -la $ANDROID_HOME
+        echo "Build tools:"
+        ls -la $ANDROID_HOME/build-tools/ || echo "No build-tools directory"
+        
+        # Add to PATH
+        echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+        echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+        echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
+        echo "$ANDROID_HOME/build-tools/33.0.2" >> $GITHUB_PATH
+        echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip setuptools wheel
+        python -m pip install "Cython>=0.29"
+        python -m pip install "buildozer==1.6.0"
+        python -m pip install "kivy==2.3.0"
+        python -m pip install numpy requests urllib3 pypinyin
+
+    - name: Configure buildozer
+      run: |
+        # 修改 buildozer.spec 文件以跳过 git clone
+        sed -i 's/p4a.no_git_clone = False/p4a.no_git_clone = True/g' buildozer.spec
+        
+        # 显示配置文件的部分内容以供调试
+        echo "=== buildozer.spec 配置 ==="
+        head -n 50 buildozer.spec
+
+    - name: Build APK with buildozer
+      id: build
+      run: |
+        set -euo pipefail
+        
+        echo "=== 环境信息 ==="
+        echo "Python: $(python --version)"
+        echo "Pip: $(pip --version)"
+        echo "Buildozer: $(buildozer --version || true)"
+        echo "Java: $(java -version 2>&1)"
+        echo "ANDROID_HOME: $ANDROID_HOME"
+        echo "PATH: $PATH"
+        
+        echo "=== 检查 Android 工具 ==="
+        which aidl || echo "aidl 未找到"
+        which dx || echo "dx 未找到"
+        ls -la $ANDROID_HOME/build-tools/33.0.2/ || echo "build-tools 目录不存在"
+        
+        echo "=== 开始构建 ==="
+        # 运行 buildozer 构建
+        buildozer android debug
+
+    - name: Upload build artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-artifacts
+        path: |
+          bin/*.apk
+          bin/*.aab
+          .buildozer/
+          ~/.buildozer/
+
+  diagnose-failure:
+    runs-on: ubuntu-20.04
+    needs: build-apk
+    if: failure()
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Diagnose build environment
+      run: |
+        echo "=== 系统信息 ==="
+        uname -a
+        echo "=== 磁盘使用情况 ==="
+        df -h
+        echo "=== 内存使用情况 ==="
+        free -h
+        echo "=== 环境变量 ==="
+        env | grep -i android || true
+        echo "=== 当前目录内容 ==="
+        ls -la
+        echo "=== .buildozer 目录内容 ==="
+        ls -la .buildozer/ || echo ".buildozer 目录不存在"
+        echo "=== bin 目录内容 ==="
+        ls -la bin/ || echo "bin 目录不存在"
